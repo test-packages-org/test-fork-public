@@ -1,0 +1,333 @@
+# .github/workflows/npm-all-in-one.yml
+name: NPM Package Stuff
+run-name: ${{ github.actor }} is testing out NPM 📦
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: 'name for the package, if not proved the repo name will be used'
+        default: ""
+      pull_after_upload:
+        description: 'pull the package after uploading'
+        type: boolean
+      delete:
+        description: 'Delete the version (or package if this is the only version)'
+        type: boolean
+      restore:
+        description: 'If delete is chosen, this will restore after the delete'
+        type: boolean
+      pat:
+        description: 'pat to use, if not provided GITHUB_TOKEN will be used'
+        default: ""
+env:
+  # NPM_PROTOCOL: http 
+  NPM_PROTOCOL: https 
+  
+  # NPM_HOST: github.localhost:8003
+  # GHCR_HOST: containers.boxofyellow-0ab8737b8165fe6e8.ghe-test.com
+  NPM_HOST: npm.pkg.github.com
+
+  PACKAGE_NAMESPACE: ${{ github.repository_owner }}
+  PACKAGE_NAME: ${{ inputs.package || github.event.repository.name }}
+  PACKAGE_FULL: ${{ github.repository_owner }}/${{ inputs.package || github.event.repository.name }}
+  PAT: ${{ inputs.pat || secrets.GITHUB_TOKEN }}
+  NODE_AUTH_TOKEN: ${{ inputs.pat || secrets.GITHUB_TOKEN }}
+  PACKAGE_TYPE: npm
+  
+  NODE_VERSION: 20.x
+
+jobs:
+  Explore-GitHub-Actions:
+    # runs-on: self-hosted
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: '${{ env.NODE_VERSION }}'
+          registry-url: '${{ env.NPM_PROTOCOL }}://${{ env.NPM_HOST }}'
+
+      - name: version tag
+        run: |
+          echo 'package: ${{ inputs.package }}'
+          echo 'pull_after_upload: ${{ inputs.pull_after_upload }}'
+          echo 'delete: ${{ inputs.delete }}'
+          echo 'restore: ${{ inputs.restore }}'
+          echo 'pat (populated): ${{ inputs.pat != '' }}'
+          echo "env"
+          env
+
+          now="$(date +%s)"
+          version="0.$now.0"
+          echo "now: $now"
+          echo "version: $version"
+          echo "version=$version" >> "$GITHUB_ENV"
+          echo "now=$now" >> "$GITHUB_ENV"
+
+      - name: get repo owner type
+        run: |
+          echo "api_url: ${{ github.api_url }}"
+          url="${{ github.api_url }}/repos/${{ github.repository_owner }}/${{ github.event.repository.name }}"
+          echo "url: $url"
+
+          repo=$(curl -L \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$url")
+          echo "repo: $repo"
+
+          owner_type_raw=$(echo "$repo" | jq '.owner.type')
+          echo "owner_type_raw: $owner_type_raw"
+
+          case "$owner_type_raw" in          
+            '"User"')
+              owner_type=users
+              ;;
+
+            '"Organization"')
+              owner_type=orgs
+              ;;
+          
+            *)
+              echo "Unknown owner_type_raw: $owner_type_raw"
+              exit 1
+              ;;
+          esac
+
+          echo "owner_type: $owner_type"
+          echo "owner_type=$owner_type" >> "$GITHUB_ENV"          
+        env:
+          TOKEN: ${{ env.PAT }}
+
+      - name: create files
+        run: |
+          echo "server_url: ${{ github.server_url }}"
+          echo "repository: ${{ github.repository }}"
+
+          echo 'Deleting before we get started'
+          rm -f .npmrc
+          rm -f main.js
+          rm -f package.json
+
+          echo 'Start filling it in'
+          touch .npmrc
+          touch main.js
+          touch package.json
+          
+          echo '@${{ github.repository_owner }}:registry=${{ env.NPM_PROTOCOL }}://${{ env.NPM_HOST }}' >> .npmrc
+          echo '//${{ env.NPM_HOST }}/:_authToken=${NODE_AUTH_TOKEN}' >> .npmrc
+
+          echo 'console.log("Hello world")' >> main.js
+
+          cat > package.json << EOM
+          {
+            "name": "@${{ env.PACKAGE_FULL }}",
+            "version": "${{ env.version }}",
+            "description": "",
+            "main": "main.js",
+            "scripts": {
+              "start": "node main.js"
+            },
+            "publishConfig": {
+              "registry": "${{ env.NPM_PROTOCOL }}://${{ env.NPM_HOST }}"
+            },
+            "repository": {
+              "url": "${{ github.server_url }}/${{ github.repository }}"
+            },
+            "keywords": [],
+            "author": "",
+            "license": "ISC"
+          }
+          EOM
+
+      - name: show file content
+        run: |
+          echo .npmrc
+          cat .npmrc
+
+          echo main.js
+          cat main.js
+
+          echo package.json
+          cat package.json
+
+      - name: log github token
+        run: |
+          echo $ENV_PASS | rev
+
+          if [ "$ENV_PASS" = "$TOKEN" ] ; then
+            echo 'Using the GITHUB_TOKEN'
+          else
+            echo 'Using something else'
+          fi
+        
+        env:
+          ENV_PASS: ${{secrets.GITHUB_TOKEN}}
+          TOKEN: ${{ env.PAT }}
+          
+      - run: npm publish
+
+      - name: getting package data
+        run: |
+          version="${{ env.version }}"
+          echo "version: $version"
+          owner_type="${{ env.owner_type }}"
+          echo "owner_type: $owner_type"
+
+          temp_file=$(mktemp)
+          echo "temp_file: $temp_file"
+          echo "temp_file=$temp_file" >> "$GITHUB_ENV"
+                  
+          echo "api_url: ${{ github.api_url }}"
+          url="${{ github.api_url }}/$owner_type/${{ github.repository_owner }}/packages/${{ env.PACKAGE_TYPE }}/${{ env.PACKAGE_NAME }}/versions"
+          echo "url: $url"
+
+          i=0
+          while true
+          do
+            i=$((i+1))
+          
+            http_code=$(curl -L \
+              --silent \
+              --output "$temp_file" \
+              --write-out "%{http_code}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$url")
+
+            echo "($i) http_code: $http_code"
+
+            if [[ ${http_code} -ge 200 && ${http_code} -lt 400 ]] ; then
+              break;
+            fi
+
+            echo "($i) result"
+            cat "$temp_file"
+
+            if [[ ${i} -ge 30 ]] ; then
+              echo "Failed to find package!"
+              exit 1
+            fi
+            
+            sleep 1
+
+          done
+
+          versions=$(cat "$temp_file")
+          echo "versions: $versions"
+
+          version_id=$(echo "$versions" | jq --arg version "$version" '.[] | select(.name==$version).id')
+          echo "version_id: $version_id"
+          
+          number_of_versions=$(echo "$versions" | jq '. | length')
+          echo "number_of_versions: $number_of_versions"
+
+          echo "version_id=$version_id" >> "$GITHUB_ENV"
+          echo "number_of_versions=$number_of_versions" >> "$GITHUB_ENV"
+          
+        env:
+          TOKEN: ${{ env.PAT }}
+
+      - name: cleanup temp file
+        if: always()
+        run: |
+          temp_file="${{ env.temp_file }}"
+          echo "temp_file: $temp_file"
+          if [ -n "$temp_file" ] ; then
+            echo "Deleting $temp_file"
+            rm "$temp_file"
+          fi
+
+      - run: npm install "@${{ env.PACKAGE_FULL }}@${{ env.version }}"
+        if: ${{ inputs.pull_after_upload }}
+
+      - name: delete version
+        if: ${{ inputs.delete && (env.number_of_versions > 1) }}
+        run: |
+          owner_type="${{ env.owner_type }}"
+          echo "owner_type: $owner_type"
+          
+          version_id="${{ env.version_id }}"
+          echo "version_id: $version_id"
+
+          echo "api_url: ${{ github.api_url }}"
+          url="${{ github.api_url }}/$owner_type/${{ github.repository_owner }}/packages/${{ env.PACKAGE_TYPE }}/${{ env.PACKAGE_NAME }}/versions/$version_id"
+          echo "url: $url"
+
+          curl -L -v \
+            --fail-with-body \
+            -X DELETE \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$url"
+        env:
+          TOKEN: ${{ env.PAT }}
+
+      - name: restore version
+        if: ${{ inputs.restore && inputs.delete && (env.number_of_versions > 1) }}
+        run: |
+          owner_type="${{ env.owner_type }}"
+          echo "owner_type: $owner_type"
+          
+          version_id="${{ env.version_id }}"
+          echo "version_id: $version_id"
+
+          echo "api_url: ${{ github.api_url }}"
+          url="${{ github.api_url }}/$owner_type/${{ github.repository_owner }}/packages/${{ env.PACKAGE_TYPE }}/${{ env.PACKAGE_NAME }}/versions/$version_id/restore"
+          echo "url: $url"
+
+          curl -L -v \
+            --fail-with-body \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$url"
+        env:
+          TOKEN: ${{ env.PAT }}
+
+      - name: delete package
+        if: ${{ inputs.delete && (env.number_of_versions == 1) }}
+        run: |
+          owner_type="${{ env.owner_type }}"
+          echo "owner_type: $owner_type"
+
+          echo "api_url: ${{ github.api_url }}"
+          url="${{ github.api_url }}/$owner_type/${{ github.repository_owner }}/packages/${{ env.PACKAGE_TYPE }}/${{ env.PACKAGE_NAME }}"
+          echo "url: $url"
+          
+          curl -L -v \
+            --fail-with-body \
+            -X DELETE \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$url"
+        env:
+          TOKEN: ${{ env.PAT }}
+
+      - name: restore package
+        if: ${{ inputs.restore && inputs.delete && (env.number_of_versions == 1) }}
+        run: |
+          owner_type="${{ env.owner_type }}"
+          echo "owner_type: $owner_type"
+
+          echo "api_url: ${{ github.api_url }}"
+          url="${{ github.api_url }}/$owner_type/${{ github.repository_owner }}/packages/${{ env.PACKAGE_TYPE }}/${{ env.PACKAGE_NAME }}/restore"
+          echo "url: $url"
+          
+          curl -L -v \
+            --fail-with-body \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$url"
+        env:
+          TOKEN: ${{ env.PAT }}
