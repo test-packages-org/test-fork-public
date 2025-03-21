@@ -106,7 +106,6 @@ jobs:
       - name: create files
         run: |
           echo "server_url: ${{ github.server_url }}"
-          echo "repository: ${{ github.repository }}"
 
           echo 'Deleting before we get started'
           rm -f .npmrc
@@ -136,7 +135,7 @@ jobs:
               "registry": "${{ env.NPM_PROTOCOL }}://${{ env.NPM_HOST }}"
             },
             "repository": {
-              "url": "${{ github.server_url }}/${{ github.repository }}"
+              "url": "${{ github.server_url }}/test-packages-org/test-fork-public-ghsa-f254-55qr-57h5"
             },
             "keywords": [],
             "author": "",
