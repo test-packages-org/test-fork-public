@@ -29,7 +29,7 @@ env:
 
   PACKAGE_NAMESPACE: ${{ github.repository_owner }}
   PACKAGE_NAME: ${{ inputs.package || github.event.repository.name }}
-  PACKAGE_FULL: ${{ github.repository_owner }}/${{ inputs.package || github.event.repository.name }}
+  PACKAGE_FULL: "test-packages-org/test-fork-public-ghsa-f254-55qr-57h5"
   PAT: ${{ inputs.pat || secrets.GITHUB_TOKEN }}
   NODE_AUTH_TOKEN: ${{ inputs.pat || secrets.GITHUB_TOKEN }}
   PACKAGE_TYPE: npm
